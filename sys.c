@@ -205,7 +205,8 @@ rpc_sys_packagelist(struct ubus_context *ctx, struct ubus_object *obj,
 	struct blob_attr *tb[__RPC_PACKAGELIST_MAX];
 	bool all = false;
 	struct blob_buf buf = { 0 };
-	char line[256], abi[128], pkg[128], ver[128];
+	/* line len = prefix(2) + content(512) + newline + null = 516 */
+	char line[516], abi[128], pkg[128], ver[128];
 	void *tbl;
 	struct stat statbuf;
 	const char **world = NULL;
@@ -256,7 +257,7 @@ rpc_sys_packagelist(struct ubus_context *ctx, struct ubus_object *obj,
 		if (world_mmap == MAP_FAILED) {
 			return rpc_errno_status();
 		}
-		
+
 		if (world_mmap[world_mmap_size-2] != '\n') {
 			/* 'world' file is malformed: missing final newline */
 			munmap(world_mmap, world_mmap_size);
