@@ -71,6 +71,11 @@ struct rpc_file_exec_context {
 	struct ustream_fd opipe;
 	struct ustream_fd epipe;
 	int stat;
+	bool replied;    
+	struct uloop_timeout read_pipes;
+	int read_pipes_interval;
+	int read_pipes_trynum;
+	int read_pipes_trymax;
 };
 
 
@@ -786,6 +791,8 @@ rpc_ustream_to_blobmsg(struct ustream *s, const char *name)
 static void
 rpc_file_exec_reply(struct rpc_file_exec_context *c, int rv)
 {
+	c->replied = true;
+	uloop_timeout_cancel(&c->read_pipes);
 	uloop_timeout_cancel(&c->timeout);
 	uloop_process_delete(&c->process);
 
@@ -824,6 +831,33 @@ rpc_file_exec_timeout_cb(struct uloop_timeout *t)
 }
 
 static void
+rpc_file_exec_read_pipes_cb(struct uloop_timeout * ut)
+{
+	struct rpc_file_exec_context *c =
+		container_of(ut, struct rpc_file_exec_context, read_pipes);
+
+	if (!c->opipe.stream.eof)
+		ustream_poll(&c->opipe.stream);
+
+	if (!c->epipe.stream.eof)
+		ustream_poll(&c->epipe.stream);
+
+	if (c->replied)
+		return;
+
+	if (c->opipe.stream.eof && c->epipe.stream.eof) {
+		rpc_file_exec_reply(c, UBUS_STATUS_OK);
+		return;
+	}
+	if (c->read_pipes_trynum >= c->read_pipes_trymax) {
+		rpc_file_exec_reply(c, UBUS_STATUS_SYSTEM_ERROR);
+		return;
+	}
+	c->read_pipes_trynum++;
+	uloop_timeout_set(ut, c->read_pipes_interval);
+}
+
+static void
 rpc_file_exec_process_cb(struct uloop_process *p, int stat)
 {
 	struct rpc_file_exec_context *c =
@@ -831,8 +865,20 @@ rpc_file_exec_process_cb(struct uloop_process *p, int stat)
 
 	c->stat = stat;
 
+	uloop_process_delete(&c->process);
+	uloop_timeout_cancel(&c->timeout);
+
 	ustream_poll(&c->opipe.stream);
 	ustream_poll(&c->epipe.stream);
+
+	if (!c->replied) {
+		c->read_pipes_trynum = 0;
+		c->read_pipes_trymax = 10;
+		c->read_pipes_interval = 5;
+		c->read_pipes.cb = rpc_file_exec_read_pipes_cb;
+		// give 50 ms to reading EOF from pipes
+		uloop_timeout_set(&c->read_pipes, c->read_pipes_interval);
+	}
 }
 
 static void
